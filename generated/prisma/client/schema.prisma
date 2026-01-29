@@ -1,0 +1,62 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AnalysisStatus {
+  PENDING
+  SCANNING
+  COMPLETED
+  FAILED
+}
+
+enum VerdictLabel {
+  LEGITIMO
+  SPAM
+  MALWARE
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  createdAt DateTime @default(now())
+
+  settings UserSettings?
+  analyses Analysis[]
+}
+
+model UserSettings {
+  id              String @id @default(cuid())
+  userId          String @unique
+  username        String
+  aiProvider      String
+  malwareProvider String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Analysis {
+  id     String         @id @default(cuid())
+  userId String
+  status AnalysisStatus @default(PENDING)
+
+  perceptronLabel    VerdictLabel?
+  perceptronScore    Int?
+  perceptronEvidence Json?
+
+  finalLabel VerdictLabel?
+  finalScore Int?
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
