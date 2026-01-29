@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { DashboardFooter } from "@/app/(auth)/dashboard/components/dashboard-footer";
 
 export type ChatItem = { id: string; title: string; createdAt: string };
 
@@ -90,9 +89,6 @@ export function DashboardSidebar(props: {
           </div>
         </div>
       </ScrollArea>
-
-      <Separator />
-      <DashboardFooter />
     </aside>
   );
 }

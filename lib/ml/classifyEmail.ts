@@ -1,96 +1,189 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ClassLabel, ModelJSON } from "./model-types";
-import { tokenize } from "./tokenize";
-import { extractExtraCounts, makeText } from "./features";
+import { tokenize } from "@/lib/ml/tokenize";
+import { extractExtraCounts, makeText } from "@/lib/ml/features";
+import type { ModelJSON, ClassLabel } from "@/lib/ml/model-types";
 
-type Result = {
-  label: ClassLabel;
-  score: number; // 0..100
-  probs: Record<ClassLabel, number>;
-  evidences: string[];
+export type VerdictLabel = "LEGITIMO" | "SPAM" | "MALWARE";
+
+export type PerceptronResult = {
+  label: VerdictLabel;
+  score: number; // 0-100
+  evidence: string[]; // frases curtas
 };
 
-let cachedModel: ModelJSON | null = null;
+type SparseVec = Map<number, number>;
+
+const DEFAULT_MODEL_PATH = path.join(process.cwd(), "model", "model.json");
+
+// cache global (evita ler o ficheiro a cada request)
+const globalForModel = globalThis as unknown as { __perceptronModel?: ModelJSON };
 
 function loadModel(): ModelJSON {
-  if (cachedModel) return cachedModel;
-  const p = path.join(process.cwd(), "model", "model.json");
+  if (globalForModel.__perceptronModel) return globalForModel.__perceptronModel;
+
+  const p = process.env.PERCEPTRON_MODEL_PATH
+    ? path.resolve(process.env.PERCEPTRON_MODEL_PATH)
+    : DEFAULT_MODEL_PATH;
+
+  if (!fs.existsSync(p)) {
+    throw new Error(
+      `Modelo do perceptron não encontrado em: ${p}. Garante que existe model/model.json (ou define PERCEPTRON_MODEL_PATH).`
+    );
+  }
+
   const raw = fs.readFileSync(p, "utf-8");
-  cachedModel = JSON.parse(raw) as ModelJSON;
-  return cachedModel!;
+  const model = JSON.parse(raw) as ModelJSON;
+
+  // validação mínima
+  if (!model.vocab?.length || !model.idf?.length || !model.weights?.length) {
+    throw new Error("model.json inválido (vocab/idf/weights em falta).");
+  }
+
+  globalForModel.__perceptronModel = model;
+  return model;
 }
 
-function softmax(xs: number[]): number[] {
-  const m = Math.max(...xs);
-  const exps = xs.map(x => Math.exp(x - m));
-  const sum = exps.reduce((a, b) => a + b, 0);
-  return exps.map(e => e / sum);
+function softmax(logits: number[]): number[] {
+  const max = Math.max(...logits);
+  const exps = logits.map((x) => Math.exp(x - max));
+  const sum = exps.reduce((a, b) => a + b, 0) || 1;
+  return exps.map((e) => e / sum);
 }
 
-export function classifyEmail(subject: string, body: string): Result {
-  const model = loadModel();
-  const text = makeText(subject, body);
-  const toks = tokenize(text);
+function argMax(arr: number[]): number {
+  let best = 0;
+  for (let i = 1; i < arr.length; i++) if (arr[i] > arr[best]) best = i;
+  return best;
+}
 
-  const vocabIndex = new Map(model.vocab.map((t, i) => [t, i] as const));
-
-  // TF
+function vectorize(
+  toks: string[],
+  vocabIndex: Map<string, number>,
+  idf: number[],
+  extra: { tokenCount: number; urlCount: number; suspiciousWordCount: number; upperRatio: number }
+): SparseVec {
   const tf = new Map<number, number>();
+
   for (const t of toks) {
     const i = vocabIndex.get(t);
     if (i !== undefined) tf.set(i, (tf.get(i) ?? 0) + 1);
   }
 
+  const x: SparseVec = new Map();
+
   let maxTF = 1;
   for (const v of tf.values()) if (v > maxTF) maxTF = v;
 
-  // sparse vector (token features)
-  const x = new Map<number, number>();
   for (const [i, c] of tf) {
     const tfNorm = c / maxTF;
-    x.set(i, tfNorm * model.idf[i]);
+    x.set(i, tfNorm * idf[i]);
   }
 
-  // extras
-  const extra = extractExtraCounts(subject, body);
-  const base = model.vocab.length;
+  const base = vocabIndex.size;
   x.set(base + 0, Math.min(extra.tokenCount / 2000, 1));
   x.set(base + 1, Math.min(extra.urlCount / 50, 1));
   x.set(base + 2, Math.min(extra.suspiciousWordCount / 50, 1));
   x.set(base + 3, Math.min(extra.upperRatio, 1));
 
-  // scores
-  const scores = model.classes.map((_, c) => {
-    let s = model.bias[c];
-    const w = model.weights[c];
-    for (const [j, v] of x) s += w[j] * v;
-    return s;
+  return x;
+}
+
+function buildEvidence(args: {
+  model: ModelJSON;
+  classIndex: number;
+  x: SparseVec;
+  maxItems?: number;
+}): string[] {
+  const { model, classIndex, x } = args;
+  const maxItems = args.maxItems ?? 6;
+
+  const W = model.weights[classIndex]; // number[]
+  const vocabSize = model.vocab.length;
+  const extras = model.extraFeatureNames ?? ["tokenCount", "urlCount", "suspiciousWordCount", "upperRatio"];
+
+  // contribuições = w_j * x_j (ordenar desc)
+  const contribs: Array<{ idx: number; value: number }> = [];
+  for (const [j, v] of x) {
+    const c = (W[j] ?? 0) * v;
+    if (c > 0) contribs.push({ idx: j, value: c });
+  }
+
+  contribs.sort((a, b) => b.value - a.value);
+
+  const ev: string[] = [];
+  for (const item of contribs.slice(0, maxItems)) {
+    const j = item.idx;
+    if (j < vocabSize) {
+      ev.push(`Indicador lexical: "${model.vocab[j]}"`);
+    } else {
+      const k = j - vocabSize;
+      const name = extras[k] ?? `extra_${k}`;
+      if (name === "urlCount") ev.push("Presença de links/URLs no email.");
+      else if (name === "upperRatio") ev.push("Percentagem elevada de maiúsculas (tom alarmista).");
+      else if (name === "suspiciousWordCount") ev.push("Ocorrência de palavras consideradas suspeitas.");
+      else if (name === "tokenCount") ev.push("Comprimento/volume de texto fora do padrão.");
+      else ev.push(`Feature adicional: ${name}`);
+    }
+  }
+
+  // fallback
+  if (!ev.length) return ["Sem evidências fortes detetadas (confiança baixa/moderada)."];
+  return ev;
+}
+
+function coerceVerdictLabel(x: ClassLabel): VerdictLabel {
+  if (x === "LEGITIMO" || x === "SPAM" || x === "MALWARE") return x;
+  // fallback defensivo
+  return "LEGITIMO";
+}
+
+/**
+ * Classifica texto do email (título+assunto+corpo) usando o modelo treinado.
+ * Devolve label (3 classes), score 0-100 e evidências.
+ */
+export async function classifyEmail(text: string): Promise<PerceptronResult> {
+  const model = loadModel();
+
+  // montar índices
+  const vocabIndex = new Map(model.vocab.map((t, i) => [t, i] as const));
+
+  // features
+  const toks = tokenize(text);
+  const extra = extractExtraCounts("", text); // subject vazio aqui; o text já vem combinado
+  const x = vectorize(toks, vocabIndex, model.idf, extra);
+
+  // logits por classe
+  const logits = model.classes.map((_, c) => {
+    let sum = model.bias[c] ?? 0;
+    const W = model.weights[c];
+    for (const [j, v] of x) sum += (W[j] ?? 0) * v;
+    return sum;
   });
 
-  const probsArr = softmax(scores);
-  const probs = Object.fromEntries(
-    model.classes.map((c, i) => [c, probsArr[i]])
-  ) as Record<ClassLabel, number>;
+  // prob via softmax (interpretação mais simples)
+  const probs = softmax(logits);
+  const best = argMax(probs);
 
-  // label = argmax
-  let best: ClassLabel = model.classes[0];
-  for (const c of model.classes) if (probs[c] > probs[best]) best = c;
+  const pred = model.classes[best];
+  const label = coerceVerdictLabel(pred);
 
-  const score = Math.round(probs[best] * 100);
+  const score = Math.max(0, Math.min(100, Math.round((probs[best] ?? 0) * 100)));
 
-  // evidences: top tokens por |peso * tfidf|
-  const classIndex = model.classes.indexOf(best);
-  const wBest = model.weights[classIndex];
+  const evidence = buildEvidence({
+    model,
+    classIndex: best,
+    x,
+    maxItems: 6,
+  });
 
-  const evidencePairs: Array<{ token: string; strength: number }> = [];
-  for (const [i, v] of x) {
-    if (i >= model.vocab.length) continue; // ignora extras na lista de tokens
-    const strength = Math.abs(wBest[i] * v);
-    if (strength > 0) evidencePairs.push({ token: model.vocab[i], strength });
-  }
-  evidencePairs.sort((a, b) => b.strength - a.strength);
-  const evidences = evidencePairs.slice(0, 12).map(e => e.token);
+  return { label, score, evidence };
+}
 
-  return { label: best, score, probs, evidences };
+/**
+ * Helper opcional: cria o texto combinado (título+assunto+corpo) no mesmo estilo do treino.
+ * Usa isto na rota antes de chamar classifyEmail().
+ */
+export function makeEmailText(subject: string, body: string) {
+  return makeText(subject ?? "", body ?? "");
 }

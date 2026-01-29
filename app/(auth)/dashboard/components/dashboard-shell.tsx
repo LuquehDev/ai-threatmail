@@ -57,7 +57,7 @@ export function DashboardShell({ initialChats, initialAnalysisId }: Props) {
           />
 
           <div className="flex-1 p-6">
-            <div className="h-full w-full">
+            <div className="flex items-center justify-center h-full w-full">
               {!selectedId ? <DashboardHero /> : <DashboardChat analysisId={selectedId} />}
             </div>
           </div>

@@ -8,12 +8,12 @@ export function DashboardHero() {
   const router = useRouter();
 
   return (
-    <div className="flex flex-col items-center">
-      <h1 className="text-4xl font-semibold tracking-tight text-center">
+    <div className="flex flex-col items-center mb-20">
+      <h1 className="text-5xl font-semibold tracking-tight text-center">
         Vamos analisar um novo email?
       </h1>
 
-      <p className="text-sm text-muted-foreground text-center max-w-md mt-2">
+      <p className="text-md text-muted-foreground text-center max-w-md mt-2">
         Inicia uma nova análise manual de email com deteção de spam, phishing e malware.
       </p>
 

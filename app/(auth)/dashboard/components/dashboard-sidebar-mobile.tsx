@@ -8,7 +8,6 @@ import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { useRouter } from "next/navigation";
-import { DashboardFooter } from "@/app/(auth)/dashboard/components/dashboard-footer";
 import type { ChatItem } from "@/app/(auth)/dashboard/components/dashboard-sidebar";
 
 export function DashboardSidebarMobile(props: {
@@ -69,9 +68,6 @@ export function DashboardSidebarMobile(props: {
                 </div>
               </div>
             </ScrollArea>
-
-            <Separator />
-            <DashboardFooter />
           </div>
         </SheetContent>
       </Sheet>
