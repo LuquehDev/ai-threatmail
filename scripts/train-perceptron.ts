@@ -6,31 +6,60 @@ import { extractExtraCounts, makeText } from "../lib/ml/features";
 import type { ModelJSON, ClassLabel } from "../lib/ml/model-types";
 import { trainOVR, type SparseVec } from "../lib/ml/perceptron-ovr";
 
-type Row = {
-  label: string;   // 0/1 ou ham/spam (depende do csv)
-  subject: string;
-  message: string;
-};
+type RawRow = Record<string, unknown>;
 
 const CLASSES: ClassLabel[] = ["LEGITIMO", "SPAM", "MALWARE"];
 
 // Indicadores para “MALWARE” (rotulagem fraca, transparente no relatório)
 const MALWARE_HINTS = [
-  "macro", "macros", "enable", "content", "payload", "trojan", "ransom", "encrypted",
-  "exe", "scr", "js", "vbs", "bat", "ps1", "jar", "iso", "img", "lnk", "hta",
-  "invoice", "fatura", "payment", "pagamento", "attachment", "anexo"
+  "macro",
+  "macros",
+  "enable",
+  "content",
+  "payload",
+  "trojan",
+  "ransom",
+  "encrypted",
+  "exe",
+  "scr",
+  "js",
+  "vbs",
+  "bat",
+  "ps1",
+  "jar",
+  "iso",
+  "img",
+  "lnk",
+  "hta",
+  "invoice",
+  "fatura",
+  "payment",
+  "pagamento",
+  "attachment",
+  "anexo",
 ];
+
+function getStr(row: RawRow, key: string): string {
+  const v = row[key];
+  if (v === null || v === undefined) return "";
+  return String(v);
+}
 
 function isSpamLabel(label: string): boolean {
   const v = (label ?? "").toString().trim().toLowerCase();
-  return v === "1" || v === "spam" || v === "true";
+  // dataset Enron Spam Data: "spam" / "ham"
+  if (v === "spam") return true;
+  if (v === "ham") return false;
+
+  // fallback genérico (caso uses outro CSV no futuro)
+  return v === "1" || v === "true" || v === "yes";
 }
 
 function weakMalwareLabel(subject: string, body: string): boolean {
   const tokens = tokenize(makeText(subject, body));
   let hits = 0;
   for (const t of tokens) if (MALWARE_HINTS.includes(t)) hits++;
-  return hits >= 2; // ajuste simples (evita marcar tudo como malware)
+  return hits >= 2; // evita marcar tudo como malware
 }
 
 function shuffle<T>(arr: T[]): T[] {
@@ -63,15 +92,19 @@ function computeIdf(docs: string[][], vocabIndex: Map<string, number>): number[]
     for (const i of seen) df[i] += 1;
   }
   const N = docs.length;
-  // idf suavizado: log((N+1)/(df+1)) + 1
-  return df.map(dfi => Math.log((N + 1) / (dfi + 1)) + 1);
+  return df.map((dfi) => Math.log((N + 1) / (dfi + 1)) + 1);
 }
 
 function vectorize(
   toks: string[],
   vocabIndex: Map<string, number>,
   idf: number[],
-  extra: { tokenCount: number; urlCount: number; suspiciousWordCount: number; upperRatio: number }
+  extra: {
+    tokenCount: number;
+    urlCount: number;
+    suspiciousWordCount: number;
+    upperRatio: number;
+  }
 ): SparseVec {
   const tf = new Map<number, number>();
   for (const t of toks) {
@@ -80,7 +113,7 @@ function vectorize(
   }
 
   const x: SparseVec = new Map();
-  // TF-IDF (tf normalizado por maxTF)
+
   let maxTF = 1;
   for (const v of tf.values()) if (v > maxTF) maxTF = v;
 
@@ -89,9 +122,8 @@ function vectorize(
     x.set(i, tfNorm * idf[i]);
   }
 
-  // features extra no fim do vetor
   const base = vocabIndex.size;
-  x.set(base + 0, Math.min(extra.tokenCount / 2000, 1));        // normalizações simples
+  x.set(base + 0, Math.min(extra.tokenCount / 2000, 1));
   x.set(base + 1, Math.min(extra.urlCount / 50, 1));
   x.set(base + 2, Math.min(extra.suspiciousWordCount / 50, 1));
   x.set(base + 3, Math.min(extra.upperRatio, 1));
@@ -106,26 +138,44 @@ function argMax(arr: number[]): number {
 }
 
 async function main() {
-  const csvPath = process.argv[2];
-  if (!csvPath) {
-    console.error("Uso: ts-node scripts/train-perceptron.ts <path-para-csv>");
+  const csvPathArg = process.argv[2];
+  if (!csvPathArg) {
+    console.error("Uso: npx tsx scripts/train-perceptron.ts <path-para-csv>");
+    process.exit(1);
+  }
+
+  const csvPath = path.resolve(csvPathArg);
+  if (!fs.existsSync(csvPath)) {
+    console.error(`CSV não encontrado: ${csvPath}`);
     process.exit(1);
   }
 
   const raw = fs.readFileSync(csvPath, "utf-8");
-  const records = parse(raw, { columns: true, skip_empty_lines: true }) as Row[];
+  const records = parse(raw, { columns: true, skip_empty_lines: true }) as RawRow[];
 
   // preparar dataset com 3 classes
   const samples = records
-    .map(r => {
-      const subject = r.subject ?? "";
-      const body = r.message ?? "";
-      const spam = isSpamLabel(r.label);
+    .map((r) => {
+      // ✅ COLUNAS DO TEU CSV
+      const subject = getStr(r, "Subject");
+      const body = getStr(r, "Message");
+      const spamHam = getStr(r, "Spam/Ham");
+
+      const spam = isSpamLabel(spamHam);
+
       let label: ClassLabel = spam ? "SPAM" : "LEGITIMO";
       if (spam && weakMalwareLabel(subject, body)) label = "MALWARE";
+
       return { subject, body, label };
     })
-    .filter(s => (s.subject || s.body));
+    .filter((s) => s.subject || s.body);
+
+  if (samples.length < 50) {
+    console.error(
+      `Poucas amostras válidas (${samples.length}). Confirma se o CSV tem as colunas: Subject, Message, Spam/Ham.`
+    );
+    process.exit(1);
+  }
 
   shuffle(samples);
 
@@ -135,11 +185,11 @@ async function main() {
   const test = samples.slice(split);
 
   // tokenização
-  const trainDocs = train.map(s => tokenize(makeText(s.subject, s.body)));
-  const testDocs = test.map(s => tokenize(makeText(s.subject, s.body)));
+  const trainDocs = train.map((s) => tokenize(makeText(s.subject, s.body)));
+  const testDocs = test.map((s) => tokenize(makeText(s.subject, s.body)));
 
   // vocab e idf
-  const TOP_N = 25000; // ajusta: 10k (rápido) a 30k (melhor)
+  const TOP_N = 25000;
   const vocab = buildVocab(trainDocs, TOP_N);
   const vocabIndex = new Map(vocab.map((t, i) => [t, i] as const));
   const idf = computeIdf(trainDocs, vocabIndex);
@@ -159,7 +209,7 @@ async function main() {
     ytrain.push(CLASSES.indexOf(s.label));
   }
 
-  // treinar
+  // treinar (One-vs-Rest)
   const { W, b } = trainOVR({
     X: Xtrain,
     y: ytrain,
@@ -194,10 +244,10 @@ async function main() {
     vocab,
     idf,
     classes: CLASSES,
-    weights: W.map(w => Array.from(w)),
+    weights: W.map((w) => Array.from(w)),
     bias: Array.from(b),
     extraFeatureNames: extraNames,
-    thresholds: { spam: 0.70, malware: 0.80 }, // score/prob no runtime (ajustável)
+    thresholds: { spam: 0.7, malware: 0.8 },
   };
 
   const outDir = path.join(process.cwd(), "model");
@@ -206,7 +256,7 @@ async function main() {
   console.log("Modelo guardado em: model/model.json");
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error(err);
   process.exit(1);
 });

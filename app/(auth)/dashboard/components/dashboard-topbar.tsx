@@ -50,14 +50,14 @@ export function DashboardTopbar({ items }: { items: Crumb[] }) {
         </BreadcrumbList>
       </Breadcrumb>
 
-      <div className="flex items-center justify-between rounded-xl border bg-card p-3">
+      <div className="flex items-center justify-between rounded-xl border bg-white/5 hover:bg-white/10 p-3">
         <div className="flex items-center gap-3">
           <Avatar className="h-9 w-9">
             <AvatarFallback>LP</AvatarFallback>
           </Avatar>
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">Luiz</div>
-            <div className="truncate text-xs text-muted-foreground">Plano: Student</div>
+            <div className="truncate text-xs text-muted-foreground">Plano: Free</div>
           </div>
         </div>
 

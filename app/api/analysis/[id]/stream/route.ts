@@ -4,8 +4,9 @@ import { authOptions } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { streamGroqText } from "@/lib/ai/groq-stream";
 import { resolveGroqModel } from "@/lib/ai/groq";
-import { classifyEmail } from "@/lib/ml/classifyEmail";
+import { classifyEmailText } from "@/lib/ml/classifyEmail";
 import { combineVerdict } from "@/lib/ml/final-veredict";
+import type { VerdictLabel } from "@prisma/client";
 
 export async function GET(
   _req: Request,
@@ -38,48 +39,65 @@ export async function GET(
   });
   if (!analysis) return NextResponse.json({ error: "Análise não encontrada" }, { status: 404 });
 
-  // SETTINGS (schema real: groqModel)
+  // SETTINGS
   const settings = await prisma.userSettings.findUnique({
     where: { userId: user.id },
     select: { groqModel: true },
   });
   if (!settings) return NextResponse.json({ error: "Configuração não encontrada" }, { status: 400 });
 
-  // REPLAY
+  // REPLAY COMPLETO
   if (analysis.status === "COMPLETED" && analysis.aiResponse) {
     const enc = new TextEncoder();
-    const text = analysis.aiResponse ?? "";
-
     return new NextResponse(
       new ReadableStream({
         start(controller) {
-          controller.enqueue(enc.encode(text));
+          controller.enqueue(enc.encode(analysis.aiResponse ?? ""));
           controller.close();
         },
       }),
-      {
-        headers: {
-          "Content-Type": "text/plain; charset=utf-8",
-          "Cache-Control": "no-store",
-        },
-      }
+      { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } }
     );
   }
 
-  // bloquear streams duplicados
+  // SE JÁ ESTÁ A CORRER: não devolve 409 (para não gerar toast vermelho)
   if (analysis.status === "SCANNING") {
-    return NextResponse.json({ error: "Análise já em execução" }, { status: 409 });
+    const enc = new TextEncoder();
+    const partial = analysis.aiResponse ?? "";
+    return new NextResponse(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(enc.encode(partial));
+          controller.close();
+        },
+      }),
+      { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } }
+    );
   }
 
   // marcar SCANNING
   await prisma.analysis.update({
     where: { id: analysis.id },
-    data: { status: "SCANNING", aiResponse: null },
+    data: { status: "SCANNING", aiResponse: "" },
   });
 
   // 1) PERCEPTRON
-  const textToClassify = [analysis.emailTitle, analysis.emailSubject, analysis.emailBody].join("\n\n");
-  const p = await classifyEmail(textToClassify);
+  const fullText = [analysis.emailTitle, analysis.emailSubject, analysis.emailBody].join("\n\n");
+
+  let p: { label: VerdictLabel; score: number; evidence: string[] };
+  try {
+    const r = classifyEmailText(fullText);
+    p = { label: r.label as VerdictLabel, score: r.score, evidence: r.evidence };
+  } catch {
+    await prisma.analysis.update({
+      where: { id: analysis.id },
+      data: { status: "FAILED" },
+    });
+    return NextResponse.json(
+      { error: "Falha ao classificar email. Confirma model/model.json." },
+      { status: 500 }
+    );
+  }
 
   await prisma.analysis.update({
     where: { id: analysis.id },
@@ -99,7 +117,7 @@ export async function GET(
     malwareHits,
   });
 
-  // 3) GROQ (2 modelos via enum groqModel)
+  // 3) GROQ
   const model = resolveGroqModel(settings.groqModel);
 
   const system = `
@@ -107,12 +125,15 @@ export async function GET(
 Responde exclusivamente em português de Portugal.
 Não faças perguntas.
 
-Tens de produzir:
-- Veredito final (Legítimo | Spam | Malware)
-- Score de risco final (0-100)
-- Evidências (bullets)
-- Medidas de mitigação (passos)
-Tom humano e claro.
+Formato obrigatório:
+Veredito Final: <Legítimo|Spam|Malware>
+Score de Risco Final: <0-100>
+
+Evidências:
+- ...
+
+Medidas de Mitigação:
+1. ...
 `.trim();
 
   const userPrompt = `
@@ -123,27 +144,40 @@ ASSUNTO: ${analysis.emailSubject}
 CORPO:
 ${analysis.emailBody}
 
-RESULTADO DO PERCEPTRON (para referência):
+RESULTADO DO PERCEPTRON:
 - label: ${p.label}
 - score: ${p.score}/100
 - evidências:
-${(p.evidence ?? []).map((e: string) => `  - ${e}`).join("\n")}
+${(p.evidence ?? []).map((e) => `  - ${e}`).join("\n")}
 
-SINAL MALWARE (anexos):
-- deteções: ${malwareHits}
+ANEXOS:
+- deteções malware: ${malwareHits}
 
-VEREDITO/Score calculado pelo sistema (prévio):
+VEREDITO (pré-calculado):
 - finalLabel: ${finalLabel}
 - finalScore: ${finalScore}/100
 
-Agora escreve a explicação final para o utilizador, mantendo estes valores.
+Escreve a explicação final mantendo os valores finalLabel/finalScore.
+
+O resultado do perceptron é apenas um indicador estatístico.
+Deves validar o resultado com base em sinais reais de risco.
+
+Se o email:
+- não contém links estranhos ou desconhecidos,
+- não contém anexos que sejam classificados malware,
+- não pede credenciais,
+- não cria urgência artificial,
+
+então NÃO deve ser classificado como spam,
+mesmo que o perceptron indique um score elevado
 `.trim();
 
-  // 4) STREAM GROQ + guardar no DB
   const upstream = await streamGroqText({ model, system, user: userPrompt });
 
   const dec = new TextDecoder();
+  const enc = new TextEncoder();
   let fullResponse = "";
+  let lastPersist = Date.now();
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -154,8 +188,20 @@ Agora escreve a explicação final para o utilizador, mantendo estes valores.
           const { done, value } = await reader.read();
           if (done) break;
 
-          fullResponse += dec.decode(value, { stream: true });
-          controller.enqueue(value);
+          const chunkText = dec.decode(value, { stream: true });
+          fullResponse += chunkText;
+
+          controller.enqueue(enc.encode(chunkText));
+
+          // ✅ persistência incremental (para F5 não perder)
+          const now = Date.now();
+          if (now - lastPersist >= 1000) {
+            lastPersist = now;
+            await prisma.analysis.update({
+              where: { id: analysis.id },
+              data: { aiResponse: fullResponse },
+            });
+          }
         }
 
         await prisma.analysis.update({
@@ -170,13 +216,41 @@ Agora escreve a explicação final para o utilizador, mantendo estes valores.
         });
 
         controller.close();
-      } catch (err) {
+      } catch (err: any) {
+        // abort do client não deve marcar failed se já há texto
+        const s = `${String(err?.name ?? "")} ${String(err?.message ?? "")}`.toLowerCase();
+        const isAbort = s.includes("abort") || s.includes("aborted") || s.includes("cancel");
+
+        if (isAbort) {
+          if (fullResponse.trim().length > 0) {
+            await prisma.analysis.update({
+              where: { id: analysis.id },
+              data: {
+                status: "COMPLETED",
+                aiResponse: fullResponse,
+                finalLabel,
+                finalScore,
+                completedAt: new Date(),
+              },
+            });
+          } else {
+            await prisma.analysis.update({
+              where: { id: analysis.id },
+              data: { status: "FAILED" },
+            });
+          }
+          controller.close();
+          return;
+        }
+
         await prisma.analysis.update({
           where: { id: analysis.id },
           data: { status: "FAILED" },
         });
 
         controller.error(err);
+      } finally {
+        reader.releaseLock();
       }
     },
   });

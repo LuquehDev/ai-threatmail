@@ -2,92 +2,137 @@
 
 import * as React from "react";
 import { toast } from "sonner";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
-type Role = "user" | "assistant";
-
-type Message = {
-  id: string;
-  role: Role;
+type Msg = {
+  role: "user" | "assistant";
   content: string;
 };
 
-type Status = "PENDING" | "SCANNING" | "COMPLETED" | "FAILED";
+async function readTextStream(res: Response, onChunk: (chunk: string) => void) {
+  const body = res.body;
+  if (!body) return;
 
-function statusText(s: Status) {
-  if (s === "PENDING") return "Pendente";
-  if (s === "SCANNING") return "A analisar…";
-  if (s === "COMPLETED") return "Concluído";
-  if (s === "FAILED") return "Falhou";
-  return s;
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    onChunk(decoder.decode(value, { stream: true }));
+  }
 }
 
-function statusClass(s: Status) {
-  if (s === "PENDING") return "bg-yellow-500 text-black";
-  if (s === "SCANNING") return "bg-yellow-500 text-black";
-  if (s === "COMPLETED") return "bg-green-600 text-white";
-  if (s === "FAILED") return "bg-destructive text-white";
-  return "bg-muted text-foreground";
-}
+export function DashboardChat(props: {
+  analysisId: string | null;
+  // opcional: se já carregas do server o texto final (replay)
+  initialAssistantText?: string | null;
+  // opcional: texto do email para mostrar como “mensagem do user”
+  initialUserText?: string | null;
+}) {
+  const { analysisId, initialAssistantText, initialUserText } = props;
 
-export function DashboardChat({ analysisId }: { analysisId: string }) {
-  const [messages, setMessages] = React.useState<Message[]>([]);
-  const [status, setStatus] = React.useState<Status>("SCANNING");
-  const [loading, setLoading] = React.useState(false);
+  const [messages, setMessages] = React.useState<Msg[]>(() => {
+    const init: Msg[] = [];
+    if (initialUserText?.trim()) init.push({ role: "user", content: initialUserText });
+    if (initialAssistantText?.trim()) init.push({ role: "assistant", content: initialAssistantText });
+    return init.length ? init : [];
+  });
 
-  const bottomRef = React.useRef<HTMLDivElement | null>(null);
+  const [isStreaming, setIsStreaming] = React.useState(false);
+
+  // evita dupla chamada por analysisId (StrictMode/dev)
+  const startedRef = React.useRef<string | null>(null);
+
+  // quando muda de chat/análise, reseta para o novo
+  React.useEffect(() => {
+    startedRef.current = null;
+
+    const init: Msg[] = [];
+    if (initialUserText?.trim()) init.push({ role: "user", content: initialUserText });
+    if (initialAssistantText?.trim()) init.push({ role: "assistant", content: initialAssistantText });
+
+    setMessages(init.length ? init : []);
+    setIsStreaming(false);
+  }, [analysisId, initialAssistantText, initialUserText]);
 
   React.useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages]);
+    if (!analysisId) return;
 
-  React.useEffect(() => {
+    // se já tens resposta completa inicial, não precisas streamar
+    if (initialAssistantText?.trim()) return;
+
+    // inicia 1x por analysisId
+    if (startedRef.current === analysisId) return;
+    startedRef.current = analysisId;
+
     let cancelled = false;
+    const ac = new AbortController();
 
     async function run() {
-      setLoading(true);
-      setStatus("SCANNING");
-      setMessages([
-        { id: "u", role: "user", content: "Email submetido. A gerar análise…" },
-        { id: "a", role: "assistant", content: "" },
-      ]);
-
       try {
+        setIsStreaming(true);
+
+        // garante msg “user”
+        setMessages((prev) => {
+          const hasUser = prev.some((m) => m.role === "user");
+          if (hasUser) return prev;
+          return [
+            ...prev,
+            {
+              role: "user",
+              content: initialUserText?.trim() || "Email submetido. A iniciar análise...",
+            },
+          ];
+        });
+
+        // garante msg “assistant” vazia
+        setMessages((prev) => {
+          const hasAssistant = prev.some((m) => m.role === "assistant");
+          if (hasAssistant) return prev;
+          return [...prev, { role: "assistant", content: "" }];
+        });
+
         const res = await fetch(`/api/analysis/${analysisId}/stream`, {
           method: "GET",
+          cache: "no-store",
+          signal: ac.signal,
         });
+
+        // a rota já não devolve 409, mas fica aqui por segurança
+        if (res.status === 409) return;
+
         if (!res.ok) {
-          const j = await res.json().catch(() => ({}));
-          throw new Error(j.error ?? "Erro no streaming");
+          const txt = await res.text().catch(() => "");
+          toast.error(txt || "Falha ao iniciar streaming.");
+          return;
         }
 
-        const reader = res.body?.getReader();
-        if (!reader) throw new Error("Sem stream no response");
+        await readTextStream(res, (chunk) => {
+          if (cancelled) return;
 
-        const dec = new TextDecoder("utf-8");
-        let acc = "";
+          setMessages((prev) => {
+            // atualiza a última mensagem do assistant (ou cria)
+            const next = [...prev];
+            let idx = -1;
+            for (let i = next.length - 1; i >= 0; i--) {
+              if (next[i].role === "assistant") {
+                idx = i;
+                break;
+              }
+            }
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+            if (idx === -1) return [...next, { role: "assistant", content: chunk }];
 
-          acc += dec.decode(value, { stream: true });
-
-          if (cancelled) continue;
-
-          setMessages((prev) =>
-            prev.map((m) => (m.id === "a" ? { ...m, content: acc } : m)),
-          );
-        }
-
-        if (!cancelled) setStatus("COMPLETED");
+            next[idx] = { ...next[idx], content: next[idx].content + chunk };
+            return next;
+          });
+        });
       } catch (e: any) {
-        if (!cancelled) {
-          setStatus("FAILED");
-          toast.error(e?.message ?? "Falha ao gerar resposta");
-        }
+        const s = `${e?.name ?? ""} ${e?.message ?? ""}`.toLowerCase();
+        if (s.includes("abort")) return;
+        toast.error("Erro durante o streaming.");
       } finally {
-        if (!cancelled) setLoading(false);
+        setIsStreaming(false);
       }
     }
 
@@ -95,66 +140,31 @@ export function DashboardChat({ analysisId }: { analysisId: string }) {
 
     return () => {
       cancelled = true;
+      ac.abort();
     };
-  }, [analysisId]);
+  }, [analysisId, initialAssistantText, initialUserText]);
 
   return (
-    <div className="h-full w-full flex flex-col">
-      {/* topo: status + id (sem linhas/separators) */}
-      <div className="flex items-center justify-between px-2 py-2">
-        <div
-          className={`text-sm py-2 px-4 rounded-full ${statusClass(status)}`}
-        >
-          {statusText(status)}
-        </div>
-        <div className="text-xs text-muted-foreground">ID: {analysisId}</div>
-      </div>
+    <div className="flex h-full w-full flex-col">
+      <div className="flex-1 overflow-y-auto p-6">
+        <div className="mx-auto w-full max-w-3xl space-y-6">
+          {messages.map((m, i) => (
+            <div key={`${m.role}-${i}`} className="flex items-start gap-3">
+              <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white/10 text-[10px]">
+                {m.role === "user" ? "EU" : "AI"}
+              </div>
 
-      {/* mensagens ocupam 100% do espaço */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="w-full h-full px-2 py-6">
-          <div className="space-y-6">
-            {messages.map((m) => (
-              <ChatRow
-                key={m.id}
-                role={m.role}
-                content={m.content}
-                loading={loading}
-              />
-            ))}
-            <div ref={bottomRef} />
-          </div>
+              <div className="min-w-0 flex-1 whitespace-pre-wrap text-sm leading-relaxed">
+                {m.content || (m.role === "assistant" && isStreaming ? "…" : "")}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
-    </div>
-  );
-}
 
-function ChatRow({
-  role,
-  content,
-  loading,
-}: {
-  role: Role;
-  content: string;
-  loading: boolean;
-}) {
-  const isUser = role === "user";
-
-  return (
-    <div className="flex gap-4 justify-start">
-      <Avatar className="h-8 w-8 shrink-0">
-        <AvatarFallback>{isUser ? "U" : "AI"}</AvatarFallback>
-      </Avatar>
-
-      <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium">
-          {isUser ? "Tu" : "Assistente"}
-        </div>
-
-        <div className="mt-1 whitespace-pre-wrap text-sm leading-6">
-          {content || (!isUser && loading ? "…" : "")}
-        </div>
+      {/* Sem input, como pediste */}
+      <div className="border-t p-3 text-center text-xs text-muted-foreground">
+        {isStreaming ? "A gerar resposta…" : "Uma análise = um email. Para analisar outro, cria uma nova análise."}
       </div>
     </div>
   );
