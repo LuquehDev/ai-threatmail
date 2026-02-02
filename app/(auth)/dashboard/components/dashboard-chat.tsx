@@ -38,7 +38,6 @@ export function DashboardChat(props: {
 
   const [isStreaming, setIsStreaming] = React.useState(false);
 
-  // evita dupla chamada por analysisId (StrictMode/dev)
   const startedRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
@@ -55,7 +54,6 @@ export function DashboardChat(props: {
   React.useEffect(() => {
     if (!analysisId) return;
 
-    // se já tens resposta completa inicial, não precisas streamar
     if (initialAssistantText?.trim()) return;
 
     if (startedRef.current === analysisId) return;
@@ -68,7 +66,6 @@ export function DashboardChat(props: {
       try {
         setIsStreaming(true);
 
-        // garante msg “user”
         setMessages((prev) => {
           const hasUser = prev.some((m) => m.role === "user");
           if (hasUser) return prev;
@@ -81,7 +78,6 @@ export function DashboardChat(props: {
           ];
         });
 
-        // garante msg “assistant” vazia
         setMessages((prev) => {
           const hasAssistant = prev.some((m) => m.role === "assistant");
           if (hasAssistant) return prev;
@@ -94,14 +90,12 @@ export function DashboardChat(props: {
           signal: ac.signal,
         });
 
-        // ✅ 409 não é erro para o UI: significa “já em andamento”, mas pode devolver parcial no body
         if (!res.ok && res.status !== 409) {
           const txt = await res.text().catch(() => "");
           toast.error(txt || "Falha ao iniciar streaming.");
           return;
         }
 
-        // ✅ Lê SEMPRE o body (200 ou 409), se houver
         await readTextStream(res, (chunk) => {
           if (cancelled) return;
 

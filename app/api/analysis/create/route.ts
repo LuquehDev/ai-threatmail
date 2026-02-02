@@ -5,7 +5,7 @@ import { authOptions } from "@/auth";
 import { prisma } from "@/lib/prisma";
 
 const MAX_FILES = 5;
-const MAX_FILE_BYTES = 500 * 1024 * 1024; // 500MB
+const MAX_FILE_BYTES = 500 * 1024 * 1024;
 
 function sha256FromBytes(bytes: Uint8Array<ArrayBuffer>) {
   return crypto.createHash("sha256").update(Buffer.from(bytes)).digest("hex");
@@ -42,7 +42,7 @@ export async function POST(req: Request) {
     mimeType: string;
     sizeBytes: number;
     sha256: string;
-    content: Uint8Array<ArrayBuffer>; // <-- EXATO o que o Prisma quer
+    content: Uint8Array<ArrayBuffer>;
   }> = [];
 
   for (const f of files) {
@@ -55,7 +55,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // Força o tipo para ArrayBuffer e depois para Uint8Array<ArrayBuffer>
     const ab = (await f.arrayBuffer()) as ArrayBuffer;
     const bytes: Uint8Array<ArrayBuffer> = new Uint8Array<ArrayBuffer>(ab);
 
@@ -82,7 +81,7 @@ export async function POST(req: Request) {
               mimeType: p.mimeType,
               sizeBytes: p.sizeBytes,
               sha256: p.sha256,
-              content: p.content, // Uint8Array<ArrayBuffer> ✅
+              content: p.content,
               scanStatus: "PENDING",
             })),
           }

@@ -62,7 +62,6 @@ export async function GET(
       { status: 400 },
     );
 
-  // replay
   if (analysis.status === "COMPLETED" && analysis.aiResponse) {
     const enc = new TextEncoder();
     return new NextResponse(
@@ -81,7 +80,6 @@ export async function GET(
     );
   }
 
-  // já a correr
   if (analysis.status === "SCANNING") {
     const enc = new TextEncoder();
     const partial = analysis.aiResponse ?? "";
@@ -93,7 +91,7 @@ export async function GET(
         },
       }),
       {
-        status: 200, // <- OPÇÃO A: era 409
+        status: 200,
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
           "Cache-Control": "no-store",
@@ -137,14 +135,13 @@ export async function GET(
           });
         } finally {
           controller.enqueue(enc.encode(msg));
-          controller.close(); // <- em vez de controller.error(...)
+          controller.close();
         }
       };
 
       try {
         await push("Análise iniciada…\n\n");
 
-        // 1) perceptron
         const fullText = [
           analysis.emailTitle,
           analysis.emailSubject,
@@ -175,7 +172,6 @@ export async function GET(
 
         await push(`Perceptron: ${p.label} (${p.score}/100)\n\n`);
 
-        // 2) malware scan (sem scanResult)
         const provider = (
           settings.malwareProvider ?? "virustotal"
         ).toLowerCase();
@@ -239,14 +235,12 @@ export async function GET(
           await push("Sem anexos para analisar.\n\n");
         }
 
-        // 3) combinar veredito
         const { finalLabel, finalScore } = combineVerdict({
           perceptronLabel: p.label,
           perceptronScore: p.score,
           malwareHits,
         });
 
-        // 4) groq streaming
         const model = resolveGroqModel(settings.groqModel);
 
         const system = `

@@ -1,4 +1,3 @@
-// scripts/train-perceptron.ts
 import fs from "node:fs";
 import path from "node:path";
 import { parse } from "csv-parse";
@@ -7,7 +6,6 @@ type Row = {
   label?: string; // Spam | Ham
   text?: string;
 
-  // fallbacks (caso uses outro CSV)
   "Spam/Ham"?: string;
   Message?: string;
   Subject?: string;
@@ -23,7 +21,7 @@ type Model = {
   dim: number;
   bias: number;
   weights: number[];
-  threshold: number; // 0
+  threshold: number;
   meta: {
     trainedAt: string;
     epochs: number;
@@ -36,10 +34,10 @@ type Model = {
   };
 };
 
-const DIM = 1 << 16; // 65536
+const DIM = 1 << 16;
 const EPOCHS = 3;
 const LR = 1;
-const TEST_SPLIT_MOD = 10; // 10% teste
+const TEST_SPLIT_MOD = 10;
 const TEST_SPLIT_REMAINDER = 0;
 
 function pick(row: Row, keys: (keyof Row)[]): string {
@@ -52,7 +50,6 @@ function pick(row: Row, keys: (keyof Row)[]): string {
   return "";
 }
 
-// Tokenização simples e robusta
 function tokenize(text: string): string[] {
   return text
     .toLowerCase()
@@ -63,7 +60,6 @@ function tokenize(text: string): string[] {
     .filter((t) => t.length >= 2);
 }
 
-// FNV-1a 32-bit
 function fnv1a32(s: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
@@ -73,7 +69,6 @@ function fnv1a32(s: string): number {
   return h >>> 0;
 }
 
-// split determinístico (não depende da ordem do CSV)
 function isTestRow(row: Row): boolean {
   const id = pick(row, ["file", "Message ID"]);
   const txt = pick(row, ["text", "Message", "message"]).slice(0, 80);
@@ -95,11 +90,9 @@ function labelFromRow(row: Row): 0 | 1 | null {
 }
 
 function textFromRow(row: Row): string {
-  // dataset novo: label + text
   const txt = pick(row, ["text"]);
   if (txt) return txt;
 
-  // fallback genérico
   const subject = pick(row, ["Subject", "subject"]);
   const msg = pick(row, ["Message", "message"]);
   return `${subject}\n${msg}`.trim();
@@ -124,7 +117,6 @@ function predict(weights: Float64Array, bias: number, feats: Map<number, number>
   return score(weights, bias, feats) >= 0 ? 1 : 0;
 }
 
-// CSV streaming (tolerante)
 async function* readCsvRows(csvPath: string): AsyncGenerator<Row> {
   const rs = fs.createReadStream(csvPath);
 
@@ -147,7 +139,6 @@ async function* readCsvRows(csvPath: string): AsyncGenerator<Row> {
       yield record as Row;
     }
   } catch (e: any) {
-    // Se o CSV for “sujo” no fim (quote aberta), aproveita o que já leu
     if (String(e?.code ?? "").includes("CSV_QUOTE_NOT_CLOSED")) {
       console.warn("Aviso: CSV com quote não fechado no fim. A treinar com registos válidos lidos.");
       return;
@@ -207,7 +198,6 @@ async function train(csvPath: string) {
     console.log(`[epoch ${epoch}/${EPOCHS}] DONE seen=${seen} updates=${updates} skipped=${skipped}`);
   }
 
-  // avaliação
   let tp = 0, tn = 0, fp = 0, fn = 0;
   let seenTest = 0;
 

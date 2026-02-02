@@ -22,7 +22,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-// ✅ só os providers que tens mesmo
 const MALWARE_PROVIDERS = [
   { value: "virustotal", label: "VirusTotal" },
   { value: "metadefender", label: "MetaDefender" },

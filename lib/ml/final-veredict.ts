@@ -2,8 +2,8 @@ import type { VerdictLabel } from "@prisma/client";
 
 export function combineVerdict(args: {
   perceptronLabel: VerdictLabel;
-  perceptronScore: number; // 0-100
-  malwareHits: number;     // 0..N
+  perceptronScore: number;
+  malwareHits: number;     
 }): { finalLabel: VerdictLabel; finalScore: number } {
   const malwareBoost = Math.min(40, args.malwareHits * 20);
   const finalScore = Math.max(0, Math.min(100, Math.round(args.perceptronScore + malwareBoost)));

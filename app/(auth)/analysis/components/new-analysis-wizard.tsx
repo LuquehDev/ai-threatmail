@@ -24,7 +24,6 @@ const MAX_FILE_BYTES = MAX_MB * 1024 * 1024;
 type Step = 1 | 2 | 3 | 4;
 
 function fileKey(f: File) {
-  // chave estável p/ evitar duplicados (nome+tamanho+lastModified)
   return `${f.name}__${f.size}__${f.lastModified}`;
 }
 
@@ -58,14 +57,12 @@ export function NewAnalysisWizard() {
 
     const picked = Array.from(list);
 
-    // valida tamanho individual
     const tooBig = picked.find((f) => (f.size ?? 0) > MAX_FILE_BYTES);
     if (tooBig) {
       toast.error(`"${tooBig.name}" excede ${MAX_MB}MB.`);
       return;
     }
 
-    // junta sem duplicar
     setFiles((prev) => {
       const map = new Map<string, File>();
       for (const f of prev) map.set(fileKey(f), f);
@@ -75,7 +72,7 @@ export function NewAnalysisWizard() {
 
       if (merged.length > MAX_FILES) {
         toast.error(`Máximo de ${MAX_FILES} ficheiros.`);
-        return prev; // não altera
+        return prev;
       }
 
       return merged;
@@ -122,14 +119,11 @@ export function NewAnalysisWizard() {
 
       toast.success("Análise criada. A iniciar processamento…");
 
-      // Se tiver anexos, dispara scan imediatamente (não bloqueia o redirect)
       if (files.length > 0) {
         fetch(`/api/analysis/${id}/scan`, { method: "POST" }).catch(() => {
-          // não trava o fluxo — o streaming/rota do chat pode lidar
         });
       }
 
-      // abre o chat no dashboard (o teu DashboardChat já faz streaming)
       router.push(`/dashboard?analysisId=${id}`);
     } finally {
       setLoading(false);

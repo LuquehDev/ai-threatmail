@@ -14,7 +14,6 @@ function clampScore(x: number) {
   return Math.max(0, Math.min(100, Math.round(x)));
 }
 
-// Tenta extrair “evidências” legíveis do raw (sem depender do formato exato).
 function extractEvidence(provider: "virustotal" | "metadefender", raw: any): string[] {
   try {
     if (provider === "virustotal") {
@@ -31,7 +30,6 @@ function extractEvidence(provider: "virustotal" | "metadefender", raw: any): str
       return ["VirusTotal: relatório recebido."];
     }
 
-    // MetaDefender
     const overall =
       raw?.scan_results?.scan_all_result_a ??
       raw?.scan_results?.scan_all_result_i ??
@@ -85,7 +83,6 @@ export async function POST(_req: Request, ctx: { params: Promise<Params> | Param
 
   const provider = toProvider(settings?.malwareProvider);
 
-  // marca análise como SCANNING (opcional mas útil)
   await prisma.analysis.update({
     where: { id: analysis.id },
     data: { status: "SCANNING", malwareProvider: provider },
@@ -105,7 +102,6 @@ export async function POST(_req: Request, ctx: { params: Promise<Params> | Param
   const allReports: any[] = [];
 
   for (const f of analysis.files) {
-    // Se já está COMPLETED e do mesmo provider, não volta a gastar quota
     if (f.scanStatus === "COMPLETED" && f.scanProvider === provider) {
       const score = f.scanScore ?? 0;
       maxScore = Math.max(maxScore, score);
@@ -197,7 +193,6 @@ export async function POST(_req: Request, ctx: { params: Promise<Params> | Param
     }
   }
 
-  // agrega para Analysis (uma visão “geral” do malware)
   await prisma.analysis.update({
     where: { id: analysis.id },
     data: {
