@@ -244,5 +244,3 @@ Projeto académico com fins educativos e de portfólio profissional.
 Projeto disponibilizado exclusivamente para fins educativos.
 
 ```
-- ou validar se bate **exatamente** com o teu `.env` real
-```
