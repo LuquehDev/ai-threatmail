@@ -19,8 +19,14 @@ import { Progress } from "@/components/ui/progress";
 
 const MAX_FILES = 5;
 const MAX_MB = 500;
+const MAX_FILE_BYTES = MAX_MB * 1024 * 1024;
 
 type Step = 1 | 2 | 3 | 4;
+
+function fileKey(f: File) {
+  // chave estável p/ evitar duplicados (nome+tamanho+lastModified)
+  return `${f.name}__${f.size}__${f.lastModified}`;
+}
 
 export function NewAnalysisWizard() {
   const router = useRouter();
@@ -37,12 +43,9 @@ export function NewAnalysisWizard() {
   const progress = step === 1 ? 25 : step === 2 ? 50 : step === 3 ? 75 : 100;
 
   function next() {
-    if (step === 1 && !emailTitle.trim())
-      return toast.error("Preenche o título.");
-    if (step === 2 && !emailSubject.trim())
-      return toast.error("Preenche o assunto.");
-    if (step === 3 && !emailBody.trim())
-      return toast.error("Preenche o corpo do email.");
+    if (step === 1 && !emailTitle.trim()) return toast.error("Preenche o título.");
+    if (step === 2 && !emailSubject.trim()) return toast.error("Preenche o assunto.");
+    if (step === 3 && !emailBody.trim()) return toast.error("Preenche o corpo do email.");
     setStep((s) => (s < 4 ? ((s + 1) as Step) : s));
   }
 
@@ -52,20 +55,35 @@ export function NewAnalysisWizard() {
 
   function onPickFiles(list: FileList | null) {
     if (!list) return;
+
     const picked = Array.from(list);
 
-    if (picked.length > MAX_FILES) {
-      toast.error(`Máximo de ${MAX_FILES} ficheiros.`);
-      return;
-    }
-
-    const tooBig = picked.find((f) => f.size > MAX_MB * 1024 * 1024);
+    // valida tamanho individual
+    const tooBig = picked.find((f) => (f.size ?? 0) > MAX_FILE_BYTES);
     if (tooBig) {
       toast.error(`"${tooBig.name}" excede ${MAX_MB}MB.`);
       return;
     }
 
-    setFiles(picked);
+    // junta sem duplicar
+    setFiles((prev) => {
+      const map = new Map<string, File>();
+      for (const f of prev) map.set(fileKey(f), f);
+      for (const f of picked) map.set(fileKey(f), f);
+
+      const merged = Array.from(map.values());
+
+      if (merged.length > MAX_FILES) {
+        toast.error(`Máximo de ${MAX_FILES} ficheiros.`);
+        return prev; // não altera
+      }
+
+      return merged;
+    });
+  }
+
+  function removeFile(k: string) {
+    setFiles((prev) => prev.filter((f) => fileKey(f) !== k));
   }
 
   async function submit() {
@@ -76,31 +94,46 @@ export function NewAnalysisWizard() {
 
     setLoading(true);
 
-    const fd = new FormData();
-    fd.set("emailTitle", emailTitle.trim());
-    fd.set("emailSubject", emailSubject.trim());
-    fd.set("emailBody", emailBody.trim());
-    files.forEach((f) => fd.append("files", f));
+    try {
+      const fd = new FormData();
+      fd.set("emailTitle", emailTitle.trim());
+      fd.set("emailSubject", emailSubject.trim());
+      fd.set("emailBody", emailBody.trim());
+      files.forEach((f) => fd.append("files", f));
 
-    const res = await fetch("/api/analysis/create", {
-      method: "POST",
-      body: fd,
-    });
+      const res = await fetch("/api/analysis/create", {
+        method: "POST",
+        body: fd,
+      });
 
-    setLoading(false);
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        toast.error(j.error ?? "Erro ao criar análise.");
+        return;
+      }
 
-    if (!res.ok) {
       const j = await res.json().catch(() => ({}));
-      toast.error(j.error ?? "Erro ao criar análise.");
-      return;
+      const id = j.analysisId as string | undefined;
+
+      if (!id) {
+        toast.error("Não foi possível obter o ID da análise.");
+        return;
+      }
+
+      toast.success("Análise criada. A iniciar processamento…");
+
+      // Se tiver anexos, dispara scan imediatamente (não bloqueia o redirect)
+      if (files.length > 0) {
+        fetch(`/api/analysis/${id}/scan`, { method: "POST" }).catch(() => {
+          // não trava o fluxo — o streaming/rota do chat pode lidar
+        });
+      }
+
+      // abre o chat no dashboard (o teu DashboardChat já faz streaming)
+      router.push(`/dashboard?analysisId=${id}`);
+    } finally {
+      setLoading(false);
     }
-
-    const j = await res.json().catch(() => ({}));
-    const id = j.analysisId as string | undefined;
-
-    toast.success("Análise criada.");
-    // página de detalhe (vamos criar já a seguir, se quiseres)
-    router.push(id ? `/dashboard?analysisId=${id}` : "/dashboard");
   }
 
   return (
@@ -109,9 +142,7 @@ export function NewAnalysisWizard() {
         <Card className="shadow-sm">
           <CardHeader className="space-y-2">
             <CardTitle className="text-2xl">Nova análise</CardTitle>
-            <CardDescription>
-              Segue os 4 passos para analisar o email.
-            </CardDescription>
+            <CardDescription>Segue os 4 passos para analisar o email.</CardDescription>
             <Progress value={progress} />
           </CardHeader>
 
@@ -119,28 +150,19 @@ export function NewAnalysisWizard() {
             <Steps step={step} />
             <Separator />
 
-            {step === 1 ? (
-              <StepTitle value={emailTitle} onChange={setEmailTitle} />
-            ) : null}
-
-            {step === 2 ? (
-              <StepSubject value={emailSubject} onChange={setEmailSubject} />
-            ) : null}
-
-            {step === 3 ? (
-              <StepBody value={emailBody} onChange={setEmailBody} />
-            ) : null}
-
+            {step === 1 ? <StepTitle value={emailTitle} onChange={setEmailTitle} /> : null}
+            {step === 2 ? <StepSubject value={emailSubject} onChange={setEmailSubject} /> : null}
+            {step === 3 ? <StepBody value={emailBody} onChange={setEmailBody} /> : null}
             {step === 4 ? (
-              <StepFiles files={files} onPick={onPickFiles} />
+              <StepFiles
+                files={files}
+                onPick={onPickFiles}
+                onRemove={removeFile}
+              />
             ) : null}
 
             <div className="flex items-center justify-between pt-2">
-              <Button
-                variant="secondary"
-                onClick={back}
-                disabled={step === 1 || loading}
-              >
+              <Button variant="secondary" onClick={back} disabled={step === 1 || loading}>
                 Voltar
               </Button>
 
@@ -249,16 +271,13 @@ function StepBody(props: { value: string; onChange: (v: string) => void }) {
 function StepFiles(props: {
   files: File[];
   onPick: (list: FileList | null) => void;
+  onRemove: (key: string) => void;
 }) {
   return (
     <div className="space-y-3">
       <div className="text-sm font-medium">Ficheiros (opcional)</div>
 
-      <Input
-        type="file"
-        multiple
-        onChange={(e) => props.onPick(e.target.files)}
-      />
+      <Input type="file" multiple onChange={(e) => props.onPick(e.target.files)} />
 
       <div className="text-xs text-muted-foreground">
         Máximo: {MAX_FILES} ficheiros • até {MAX_MB}MB cada.
@@ -267,15 +286,27 @@ function StepFiles(props: {
       {props.files.length ? (
         <div className="rounded-lg border p-3">
           <div className="text-xs font-medium mb-2">Selecionados</div>
-          <ul className="space-y-1 text-sm">
-            {props.files.map((f) => (
-              <li key={f.name} className="flex items-center justify-between">
-                <span className="truncate">{f.name}</span>
-                <span className="text-xs text-muted-foreground">
-                  {(f.size / (1024 * 1024)).toFixed(1)} MB
-                </span>
-              </li>
-            ))}
+          <ul className="space-y-2 text-sm">
+            {props.files.map((f) => {
+              const k = fileKey(f);
+              return (
+                <li key={k} className="flex items-center justify-between gap-3">
+                  <span className="min-w-0 flex-1 truncate">{f.name}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {(f.size / (1024 * 1024)).toFixed(1)} MB
+                  </span>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={() => props.onRemove(k)}
+                  >
+                    Remover
+                  </Button>
+                </li>
+              );
+            })}
           </ul>
         </div>
       ) : null}

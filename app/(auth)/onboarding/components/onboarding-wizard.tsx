@@ -4,7 +4,13 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -16,67 +22,98 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+// ✅ só os providers que tens mesmo
 const MALWARE_PROVIDERS = [
   { value: "virustotal", label: "VirusTotal" },
-  { value: "hybrid-analysis", label: "Hybrid Analysis" },
   { value: "metadefender", label: "MetaDefender" },
-];
+] as const;
 
-const AI_PROVIDERS = [
-  { value: "chatgpt", label: "ChatGPT" },
-  { value: "grok", label: "Grok" },
-];
+const GROQ_MODELS = [
+  { value: "LLAMA_70B", label: "Llama 70B" },
+  { value: "LLAMA_8B", label: "Llama 8B" },
+] as const;
+
+type MalwareProvider = (typeof MALWARE_PROVIDERS)[number]["value"];
+type GroqModel = (typeof GROQ_MODELS)[number]["value"];
+type Step = 1 | 2 | 3;
 
 export function OnboardingWizard() {
   const router = useRouter();
 
-  const [step, setStep] = React.useState<1 | 2 | 3>(1);
+  const [step, setStep] = React.useState<Step>(1);
 
   const [username, setUsername] = React.useState("");
-  const [malwareProvider, setMalwareProvider] = React.useState<string>("");
-  const [aiProvider, setAiProvider] = React.useState<string>("");
+  const [malwareProvider, setMalwareProvider] =
+    React.useState<MalwareProvider | null>(null);
+  const [groqModel, setGroqModel] = React.useState<GroqModel | null>(null);
 
   const [loading, setLoading] = React.useState(false);
 
   function next() {
     if (step === 1) {
-      if (!username.trim()) return toast.error("Define um username.");
+      if (!username.trim()) {
+        toast.error("Define um username.");
+        return;
+      }
       setStep(2);
       return;
     }
+
     if (step === 2) {
-      if (!malwareProvider) return toast.error("Seleciona um serviço de análise de malware.");
+      if (!malwareProvider) {
+        toast.error("Seleciona um serviço de análise de malware.");
+        return;
+      }
       setStep(3);
     }
   }
 
   function back() {
-    setStep((s) => (s === 1 ? 1 : (s - 1) as any));
+    setStep((s) => (s === 1 ? 1 : ((s - 1) as Step)));
   }
 
   async function finish() {
-    if (!aiProvider) return toast.error("Seleciona a AI.");
-
-    setLoading(true);
-    const res = await fetch("/api/onboarding", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        username: username.trim(),
-        malwareProvider,
-        aiProvider,
-      }),
-    });
-    setLoading(false);
-
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
-      toast.error(j.error ?? "Erro ao guardar configurações.");
+    if (!username.trim()) {
+      toast.error("Define um username.");
+      setStep(1);
+      return;
+    }
+    if (!malwareProvider) {
+      toast.error("Seleciona um serviço de análise de malware.");
+      setStep(2);
+      return;
+    }
+    if (!groqModel) {
+      toast.error("Seleciona o modelo (Groq).");
       return;
     }
 
-    toast.success("Configuração concluída.");
-    router.push("/dashboard");
+    setLoading(true);
+    try {
+      const res = await fetch("/api/onboarding", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          username: username.trim(),
+          malwareProvider, // "virustotal" | "metadefender"
+          groqModel, // "LLAMA_70B" | "LLAMA_8B"
+        }),
+      });
+
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}) as any);
+        toast.error(j?.error ?? "Erro ao guardar configurações.");
+        return;
+      }
+
+      toast.success("Configuração concluída.");
+      router.replace("/dashboard");
+      router.refresh();
+    } catch {
+      toast.error("Erro de rede ao guardar configurações.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -112,8 +149,16 @@ export function OnboardingWizard() {
 
             {step === 2 ? (
               <div className="space-y-2">
-                <div className="text-sm font-medium">Serviço de análise de malware</div>
-                <Select value={malwareProvider} onValueChange={setMalwareProvider}>
+                <div className="text-sm font-medium">
+                  Serviço de análise de malware
+                </div>
+
+                <Select
+                  value={malwareProvider ?? ""}
+                  onValueChange={(v) =>
+                    setMalwareProvider(v as MalwareProvider)
+                  }
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="Selecionar..." />
                   </SelectTrigger>
@@ -125,6 +170,7 @@ export function OnboardingWizard() {
                     ))}
                   </SelectContent>
                 </Select>
+
                 <div className="text-xs text-muted-foreground">
                   Os anexos serão enviados para este serviço durante a análise.
                 </div>
@@ -133,27 +179,39 @@ export function OnboardingWizard() {
 
             {step === 3 ? (
               <div className="space-y-2">
-                <div className="text-sm font-medium">AI para explicação do veredito</div>
-                <Select value={aiProvider} onValueChange={setAiProvider}>
+                <div className="text-sm font-medium">
+                  Modelo (Groq) para a explicação
+                </div>
+
+                <Select
+                  value={groqModel ?? ""}
+                  onValueChange={(v) => setGroqModel(v as GroqModel)}
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="Selecionar..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {AI_PROVIDERS.map((p) => (
+                    {GROQ_MODELS.map((p) => (
                       <SelectItem key={p.value} value={p.value}>
                         {p.label}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+
                 <div className="text-xs text-muted-foreground">
-                  A AI só vai “humanizar” a explicação final, não é um chat contínuo.
+                  O modelo só “humaniza” a explicação final, não existe chat
+                  contínuo.
                 </div>
               </div>
             ) : null}
 
             <div className="flex items-center justify-between pt-2">
-              <Button variant="secondary" onClick={back} disabled={step === 1 || loading}>
+              <Button
+                variant="secondary"
+                onClick={back}
+                disabled={step === 1 || loading}
+              >
                 Voltar
               </Button>
 
@@ -174,17 +232,25 @@ export function OnboardingWizard() {
   );
 }
 
-function Steps({ step }: { step: 1 | 2 | 3 }) {
+function Steps({ step }: { step: Step }) {
   return (
     <div className="grid grid-cols-3 gap-2 text-xs">
       <StepItem active={step === 1} done={step > 1} label="Conta" />
       <StepItem active={step === 2} done={step > 2} label="Malware" />
-      <StepItem active={step === 3} done={false} label="AI" />
+      <StepItem active={step === 3} done={false} label="Modelo" />
     </div>
   );
 }
 
-function StepItem({ active, done, label }: { active: boolean; done: boolean; label: string }) {
+function StepItem({
+  active,
+  done,
+  label,
+}: {
+  active: boolean;
+  done: boolean;
+  label: string;
+}) {
   return (
     <div
       className={[
@@ -194,7 +260,9 @@ function StepItem({ active, done, label }: { active: boolean; done: boolean; lab
       ].join(" ")}
     >
       <div className="font-medium">{label}</div>
-      <div className="text-muted-foreground">{done ? "Concluído" : active ? "Atual" : "Pendente"}</div>
+      <div className="text-muted-foreground">
+        {done ? "Concluído" : active ? "Atual" : "Pendente"}
+      </div>
     </div>
   );
 }
