@@ -242,5 +242,3 @@ Projeto académico com fins educativos e de portfólio profissional.
 ## Licença
 
 Projeto disponibilizado exclusivamente para fins educativos.
-
-```
