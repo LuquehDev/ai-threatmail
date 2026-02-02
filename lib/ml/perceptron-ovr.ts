@@ -12,7 +12,7 @@ export function addScaled(w: Float64Array, x: SparseVec, scale: number) {
 
 export function trainOVR(opts: {
   X: SparseVec[];
-  y: number[];          // class index 0..C-1
+  y: number[];
   numClasses: number;
   dim: number;
   epochs: number;

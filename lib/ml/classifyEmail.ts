@@ -6,7 +6,7 @@ import { extractExtraCounts, makeText } from "./features";
 
 export type PerceptronResult = {
   label: ClassLabel;
-  score: number; // 0..100
+  score: number;
   evidence: string[];
 };
 
@@ -46,7 +46,6 @@ function loadAnyModel(): ModelJSON | HashedModel {
 
   cachedAnyModel = parsed as any;
 
-  // Só constrói vocabIndex se for TF-IDF (ModelJSON)
   if (!isHashed(parsed)) {
     const tfidf = parsed as ModelJSON;
     cachedVocabIndex = new Map(tfidf.vocab.map((t, i) => [t, i] as const));
@@ -57,7 +56,6 @@ function loadAnyModel(): ModelJSON | HashedModel {
   return cachedAnyModel!;
 }
 
-// ===== helpers hashed =====
 function fnv1a32(s: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
@@ -71,7 +69,6 @@ function hashedScore(model: HashedModel, tokens: string[]): number {
   let s = model.bias;
   const dimMask = model.dim - 1;
 
-  // weights vem como number[]; usar acesso directo
   for (const tok of tokens) {
     const idx = fnv1a32(tok) & dimMask;
     s += model.weights[idx] ?? 0;
@@ -79,9 +76,7 @@ function hashedScore(model: HashedModel, tokens: string[]): number {
   return s;
 }
 
-// comprime score para prob sem saturar tudo em 100
 function sigmoid(x: number): number {
-  // dividir por 6 reduz o “100 para tudo”
   const z = x / 6;
   return 1 / (1 + Math.exp(-z));
 }
@@ -92,7 +87,6 @@ function clamp01(x: number) {
   return x;
 }
 
-// ===== TF-IDF original (o teu) =====
 function softmax(xs: number[]): number[] {
   const m = Math.max(...xs);
   const exps = xs.map((x) => Math.exp(x - m));
@@ -100,21 +94,15 @@ function softmax(xs: number[]): number[] {
   return exps.map((e) => e / sum);
 }
 
-/**
- * Classifica um email a partir de subject+body
- */
 export function classifyEmail(subject: string, body: string): PerceptronResult {
   const modelAny = loadAnyModel();
 
-  // -------------------------
-  // (A) hashed_perceptron (Spam vs Ham)
-  // -------------------------
   if (isHashed(modelAny)) {
     const text = makeText(subject, body);
     const toks = tokenize(text);
 
     const s = hashedScore(modelAny, toks);
-    const pSpam = sigmoid(s); // 0..1
+    const pSpam = sigmoid(s);
     const score = Math.round(pSpam * 100);
 
     const label: ClassLabel = pSpam >= 0.5 ? "SPAM" : "LEGITIMO";
@@ -126,23 +114,18 @@ export function classifyEmail(subject: string, body: string): PerceptronResult {
     if (extra.suspiciousWordCount > 0) evidence.push(`Termos suspeitos (${extra.suspiciousWordCount})`);
     if (extra.tokenCount < 20) evidence.push("Mensagem muito curta");
 
-    // Tokens “amostra” (não dá para provar pesos num modelo hashed)
     const sample = toks.slice(0, 10);
     if (sample.length) evidence.push(`Tokens (amostra): ${sample.join(", ")}`);
 
     return { label, score, evidence: evidence.slice(0, 6) };
   }
 
-  // -------------------------
-  // (B) TF-IDF multiclasses (o teu modelo antigo)
-  // -------------------------
   const model = modelAny as ModelJSON;
   const vocabIndex = cachedVocabIndex!;
 
   const text = makeText(subject, body);
   const toks = tokenize(text);
 
-  // TF
   const tf = new Map<number, number>();
   for (const t of toks) {
     const i = vocabIndex.get(t);

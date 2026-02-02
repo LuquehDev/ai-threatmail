@@ -86,7 +86,6 @@ export function DashboardSidebar(props: {
                     ].join(" ")}
                     onClick={() => props.onSelect(c.id)}
                     onKeyDown={(e) => {
-                      // Enter ou Space ativa o item, mas Space não deve dar scroll
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
                         props.onSelect(c.id);

@@ -7,7 +7,6 @@ import { prisma } from "@/lib/prisma";
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
 
-  // ✅ JWT com TTL 30 min + rolling refresh
   session: {
     strategy: "jwt",
     maxAge: 30 * 60, // 30 min
@@ -44,7 +43,6 @@ export const authOptions: NextAuthOptions = {
         const ok = await bcrypt.compare(password, user.password);
         if (!ok) return null;
 
-        // ✅ mínimo necessário + id para callbacks
         return { id: user.id, email: user.email };
       },
     }),
@@ -52,7 +50,6 @@ export const authOptions: NextAuthOptions = {
 
   callbacks: {
     async jwt({ token, user }) {
-      // No login, `user` existe. Nas chamadas seguintes, não.
       if (user) {
         (token as any).id = (user as any).id;
         token.email = (user as any).email;

@@ -27,7 +27,6 @@ type Crumb = { label: string; href?: string };
 function initialsFromUsername(username?: string | null) {
   const u = (username ?? "").trim();
   if (!u) return "U";
-  // pega só letras/números e usa 2 primeiros chars
   const cleaned = u.replace(/\s+/g, " ");
   const two = cleaned.slice(0, 2);
   return two.toUpperCase();

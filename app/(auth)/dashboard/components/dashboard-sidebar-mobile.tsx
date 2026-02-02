@@ -14,7 +14,7 @@ export function DashboardSidebarMobile(props: {
   chats: ChatItem[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onDelete: (id: string) => void; // mantemos para consistência; podes usar depois
+  onDelete: (id: string) => void;
   onNew: () => void;
 }) {
   const router = useRouter();

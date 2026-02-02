@@ -23,14 +23,12 @@ export function DashboardShell({ initialChats, initialAnalysisId, initialUsernam
     initialAnalysisId ?? initialChats[0]?.id ?? null
   );
 
-  // Mantém seleção válida se a lista mudar (ex.: delete)
   React.useEffect(() => {
     if (selectedId && !chats.some((c) => c.id === selectedId)) {
       const next = chats[0]?.id ?? null;
       setSelectedId(next);
       router.push(next ? `/dashboard?analysisId=${next}` : "/dashboard");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chats, selectedId]);
 
   function onSelect(id: string) {
@@ -48,7 +46,6 @@ export function DashboardShell({ initialChats, initialAnalysisId, initialUsernam
         return false;
       }
 
-      // calcula o próximo id ANTES de actualizar o state
       const nextList = chats.filter((c) => c.id !== id);
       const nextId = selectedId === id ? (nextList[0]?.id ?? null) : selectedId;
 
