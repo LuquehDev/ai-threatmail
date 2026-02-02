@@ -24,9 +24,7 @@ async function readTextStream(res: Response, onChunk: (chunk: string) => void) {
 
 export function DashboardChat(props: {
   analysisId: string | null;
-  // opcional: se já carregas do server o texto final (replay)
   initialAssistantText?: string | null;
-  // opcional: texto do email para mostrar como “mensagem do user”
   initialUserText?: string | null;
 }) {
   const { analysisId, initialAssistantText, initialUserText } = props;
@@ -43,7 +41,6 @@ export function DashboardChat(props: {
   // evita dupla chamada por analysisId (StrictMode/dev)
   const startedRef = React.useRef<string | null>(null);
 
-  // quando muda de chat/análise, reseta para o novo
   React.useEffect(() => {
     startedRef.current = null;
 
@@ -61,7 +58,6 @@ export function DashboardChat(props: {
     // se já tens resposta completa inicial, não precisas streamar
     if (initialAssistantText?.trim()) return;
 
-    // inicia 1x por analysisId
     if (startedRef.current === analysisId) return;
     startedRef.current = analysisId;
 
@@ -98,20 +94,18 @@ export function DashboardChat(props: {
           signal: ac.signal,
         });
 
-        // a rota já não devolve 409, mas fica aqui por segurança
-        if (res.status === 409) return;
-
-        if (!res.ok) {
+        // ✅ 409 não é erro para o UI: significa “já em andamento”, mas pode devolver parcial no body
+        if (!res.ok && res.status !== 409) {
           const txt = await res.text().catch(() => "");
           toast.error(txt || "Falha ao iniciar streaming.");
           return;
         }
 
+        // ✅ Lê SEMPRE o body (200 ou 409), se houver
         await readTextStream(res, (chunk) => {
           if (cancelled) return;
 
           setMessages((prev) => {
-            // atualiza a última mensagem do assistant (ou cria)
             const next = [...prev];
             let idx = -1;
             for (let i = next.length - 1; i >= 0; i--) {
@@ -162,9 +156,10 @@ export function DashboardChat(props: {
         </div>
       </div>
 
-      {/* Sem input, como pediste */}
       <div className="border-t p-3 text-center text-xs text-muted-foreground">
-        {isStreaming ? "A gerar resposta…" : "Uma análise = um email. Para analisar outro, cria uma nova análise."}
+        {isStreaming
+          ? "A gerar resposta…"
+          : "Uma análise = um email. Para analisar outro, cria uma nova análise."}
       </div>
     </div>
   );

@@ -6,7 +6,16 @@ import { prisma } from "@/lib/prisma";
 
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
-  session: { strategy: "jwt" },
+
+  // ✅ JWT com TTL 30 min + rolling refresh
+  session: {
+    strategy: "jwt",
+    maxAge: 30 * 60, // 30 min
+    updateAge: 5 * 60, // renova a cada 5 min se ativo
+  },
+  jwt: {
+    maxAge: 30 * 60,
+  },
 
   secret: process.env.NEXTAUTH_SECRET,
 
@@ -26,12 +35,16 @@ export const authOptions: NextAuthOptions = {
         const password = String(credentials?.password ?? "");
         if (!email || !password) return null;
 
-        const user = await prisma.user.findUnique({ where: { email } });
+        const user = await prisma.user.findUnique({
+          where: { email },
+          select: { id: true, email: true, password: true },
+        });
         if (!user) return null;
 
         const ok = await bcrypt.compare(password, user.password);
         if (!ok) return null;
 
+        // ✅ mínimo necessário + id para callbacks
         return { id: user.id, email: user.email };
       },
     }),
@@ -42,6 +55,7 @@ export const authOptions: NextAuthOptions = {
       // No login, `user` existe. Nas chamadas seguintes, não.
       if (user) {
         (token as any).id = (user as any).id;
+        token.email = (user as any).email;
       }
       return token;
     },

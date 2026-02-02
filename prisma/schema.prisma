@@ -46,23 +46,28 @@ model User {
   analyses  Analysis[]
 }
 
-
 model UserSettings {
   id              String    @id @default(cuid())
   userId          String    @unique
   username        String
   groqModel       GroqModel @default(LLAMA_70B)
+
+  // ✅ mantém string para não dar dor em migration
+  // valores esperados: "virustotal" | "metadefender"
   malwareProvider String
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 }
 
 model Analysis {
-  id     String        @id @default(cuid())
+  id     String         @id @default(cuid())
   userId String
   status AnalysisStatus @default(PENDING)
 
-  // input do email (persistente porque precisas ver no histórico)
+  // input do email (persistente)
   emailTitle   String
   emailSubject String
   emailBody    String
@@ -72,20 +77,28 @@ model Analysis {
   perceptronScore    Int?
   perceptronEvidence Json?
 
-  // veredito final (combinação perceptron + malware scan)
+  // ✅ agregado malware (para combinar no veredito final)
+  malwareProvider String? // "virustotal" | "metadefender"
+  malwareScore    Int?
+  malwareEvidence Json?
+  malwareReport   Json?
+
+  // veredito final
   finalLabel VerdictLabel?
   finalScore Int?
 
-  // resposta final “humana” (streaming guardado no fim)
+  // resposta final “humana”
   aiResponse String?
 
   createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
   completedAt DateTime?
 
   user  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   files AnalysisFile[]
 
   @@index([userId, createdAt])
+  @@index([status])
 }
 
 model AnalysisFile {
@@ -97,16 +110,22 @@ model AnalysisFile {
   sizeBytes Int
   sha256    String
 
-  // Bytes: no Postgres isto é bytea
+  // bytea
   content   Bytes
 
   scanStatus FileScanStatus @default(PENDING)
-  scanResult Json?
+
+  scanProvider String? // "virustotal" | "metadefender"
+  scanScore    Int?
+  scanEvidence Json?
+  scanReport   Json?
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
 
   @@index([analysisId])
   @@index([sha256])
+  @@index([scanStatus])
 }

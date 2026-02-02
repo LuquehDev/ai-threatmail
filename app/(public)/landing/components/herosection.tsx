@@ -2,8 +2,10 @@
 import { Slack, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { motion } from "framer-motion";
+import { useRouter } from "next/navigation";
 
 export default function HeroSection() {
+  const router = useRouter();
   const [selectedOption, setSelectedOption] = useState("start");
   const options = [
     {
@@ -100,6 +102,7 @@ export default function HeroSection() {
               shadow-[0_0_20px_rgba(139,92,246,0.3)]
               hover:shadow-[0_0_20px_rgba(139,92,246,0.5)]
               hover:scale-102 transition-all duration-200"
+              onClick={() => router.push("/login")}
             >
               Start for Free
             </button>
@@ -133,6 +136,7 @@ export default function HeroSection() {
               shadow-[0_0_20px_rgba(139,92,246,0.3)]
               hover:shadow-[0_0_20px_rgba(139,92,246,0.5)]
               hover:scale-102 transition-all duration-200"
+              onClick={() => router.push("/login")}
             >
               Start for Free
             </button>
